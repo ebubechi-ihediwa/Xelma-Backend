@@ -15,6 +15,13 @@ model User {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   lastLoginAt     DateTime?
+  
+  // Game stats
+  wins            Int               @default(0)
+  streak          Int               @default(0)
+  virtualBalance  Float             @default(1000)
+
+  // Relations
   authChallenges  AuthChallenge[]
   predictions     Prediction[]
   stats           UserStats?
@@ -24,15 +31,15 @@ model User {
 
 // Auth challenge model for replay protection
 model AuthChallenge {
-  id          String    @id @default(uuid())
-  userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  challenge   String    @unique
+  id            String    @id @default(uuid())
+  userId        String?
+  user          User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge     String    @unique
   walletAddress String
-  createdAt   DateTime  @default(now())
-  expiresAt   DateTime
-  usedAt      DateTime?
-  isUsed      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  usedAt        DateTime?
+  isUsed        Boolean   @default(false)
 
   @@index([challenge])
   @@index([walletAddress])
