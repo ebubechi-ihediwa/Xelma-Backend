@@ -15,8 +15,10 @@ import priceOracle from './services/oracle';
 import websocketService from './services/websocket.service';
 import schedulerService from './services/scheduler.service';
 import logger from './utils/logger';
+import chatRoutes from "./routes/chat.routes";
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs/openapi';
+
 
 
 dotenv.config();
@@ -50,7 +52,7 @@ app.use("/api/rounds", roundsRoutes);
 app.use("/api/predictions", predictionsRoutes);
 app.use("/api/education", educationRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
-app.use('/api/chat', chatRoutes);
+app.use("/api/chat", chatRoutes);
 app.use("/api/notifications", notificationsRoutes);
 
 // Swagger UI (OpenAPI)
@@ -145,3 +147,5 @@ httpServer.listen(PORT, () => {
   logger.info(`🚀 Server is running on http://localhost:${PORT}`);
   logger.info(`📡 Socket.IO is ready for connections`);
 });
+
+export default app;
