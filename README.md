@@ -831,6 +831,557 @@ Set `ROUND_SCHEDULER_ENABLED=true` in `.env` and restart the server.
 
 ---
 
+## Xelma Backend Improvement Issue Backlog (Draft)
+
+The following are proposed issue drafts you can open in GitHub. They are based on the current backend code and prioritize security, correctness, reliability, and maintainability.
+
+### #1 Consolidate Prisma Client Usage to a Single Shared Instance
+Context
+Multiple files instantiate `new PrismaClient()` directly (for example middleware/services/socket), while `src/lib/prisma.ts` already provides a shared singleton. This can cause excess DB connections and inconsistent behavior across environments.
+
+What Needs to Happen
+- Replace direct `new PrismaClient()` usage with imports from `src/lib/prisma.ts`.
+- Ensure all services/middleware/socket paths use the same Prisma lifecycle.
+- Add a lightweight check/test to prevent regressions.
+
+Files to Create/Modify
+- `src/middleware/auth.middleware.ts`
+- `src/services/round.service.ts`
+- `src/services/notification.service.ts`
+- `src/services/scheduler.service.ts`
+- `src/socket.ts`
+
+Acceptance Criteria
+- No direct `new PrismaClient()` remains outside `src/lib/prisma.ts`.
+- App behavior is unchanged functionally.
+- No Prisma connection warnings during local development under load.
+
+How to Validate
+- Run `npm run build`.
+- Run `npm test`.
+- Start app and verify no repeated Prisma client initialization/connection warnings.
+
+PR Requirements
+- PR title: `refactor: centralize prisma client usage`
+- Include `Closes #[issue_id]` in PR description
+
+### #2 Refactor App Bootstrap for Testability and Graceful Shutdown
+Context
+`src/index.ts` starts polling, schedulers, WebSocket emission interval, and HTTP listen as import-time side effects. This makes integration testing harder and complicates graceful shutdown.
+
+What Needs to Happen
+- Introduce explicit `createApp()` and `startServer()` lifecycle functions.
+- Track interval/cron handles and close them on shutdown signals.
+- Add shutdown hooks for HTTP server and Prisma disconnect.
+
+Files to Create/Modify
+- `src/index.ts`
+- `src/services/oracle.ts`
+- `src/services/scheduler.service.ts`
+- `src/services/round-scheduler.service.ts`
+- `src/lib/prisma.ts`
+
+Acceptance Criteria
+- Importing app module does not automatically bind network ports.
+- Server exits cleanly on `SIGINT`/`SIGTERM`.
+- Test suites can initialize app without background jobs running unexpectedly.
+
+How to Validate
+- Run `npm test`.
+- Start app and stop with Ctrl+C; ensure clean shutdown logs with no hanging process.
+
+PR Requirements
+- PR title: `refactor: isolate startup side effects and add graceful shutdown`
+- Include `Closes #[issue_id]` in PR description
+
+### #3 Fix Round Mode Validation Bug in Start Round Endpoint
+Context
+`POST /api/rounds/start` validates mode with `if (!mode || mode < 0 || mode > 1)` which incorrectly rejects valid mode `0` (`UP_DOWN`).
+
+What Needs to Happen
+- Replace falsy checks with explicit numeric validation.
+- Add validation tests for `mode=0` and `mode=1`.
+
+Files to Create/Modify
+- `src/routes/rounds.routes.ts`
+- `src/tests/round.spec.ts`
+
+Test Scenarios
+- `mode=0` accepted.
+- `mode=1` accepted.
+- invalid values (`-1`, `2`, string) rejected with `400`.
+
+Acceptance Criteria
+- `UP_DOWN` rounds can be created via API.
+- Validation behavior is deterministic and covered by tests.
+
+How to Validate
+- Run `npm test -- --testPathPattern=round`.
+
+PR Requirements
+- PR title: `fix: correct mode validation for round creation`
+- Include `Closes #[issue_id]` in PR description
+
+### #4 Enforce Authenticated User Identity in Predictions Endpoint
+Context
+`POST /api/predictions/submit` currently accepts `userId` from request body despite requiring JWT auth. This allows user impersonation by submitting predictions for another user.
+
+What Needs to Happen
+- Remove `userId` from request body contract.
+- Use `req.user.userId` as the single source of identity.
+- Update OpenAPI docs and tests.
+
+Files to Create/Modify
+- `src/routes/predictions.routes.ts`
+- `src/docs/openapi.ts`
+- `src/tests/` (add predictions route tests)
+
+Acceptance Criteria
+- Endpoint ignores/rejects external `userId` input.
+- Authenticated user can only submit for self.
+- Docs reflect updated request schema.
+
+How to Validate
+- Add test with mismatched body `userId`; assert request fails or body field is ignored.
+- Run `npm test`.
+
+PR Requirements
+- PR title: `security: bind prediction submissions to authenticated user`
+- Include `Closes #[issue_id]` in PR description
+
+### #5 Make Prediction Submission Atomic with Database Transactions
+Context
+Prediction placement performs multiple writes (prediction insert, balance update, pool update, Soroban call) without transactional boundaries, risking partial state on failure or concurrency races.
+
+What Needs to Happen
+- Use Prisma transactions for DB writes.
+- Define contract for external Soroban call ordering and rollback strategy.
+- Add concurrency-aware tests for duplicate submissions and balance integrity.
+
+Files to Create/Modify
+- `src/services/prediction.service.ts`
+- `src/tests/` (new prediction service tests)
+
+Acceptance Criteria
+- No partial DB updates when any step fails.
+- User balance and round pools remain consistent under concurrent submissions.
+
+How to Validate
+- Run test suite including failure-injection scenarios.
+- Run stress test script for concurrent submissions.
+
+PR Requirements
+- PR title: `fix: make prediction placement transactional and race-safe`
+- Include `Closes #[issue_id]` in PR description
+
+### #6 Prevent Multiple Active Rounds from Being Created Concurrently
+Context
+Round creation paths (manual and scheduler) do not guard against overlapping active rounds. This can create ambiguous active state and inconsistent client behavior.
+
+What Needs to Happen
+- Enforce active-round guard by mode (or globally, per product rule).
+- Add conflict response (for example `409`) from API layer.
+- Ensure scheduler respects existing active rounds.
+
+Files to Create/Modify
+- `src/services/round.service.ts`
+- `src/services/round-scheduler.service.ts`
+- `src/routes/rounds.routes.ts`
+- `src/tests/round.spec.ts`
+
+Acceptance Criteria
+- At most one active round per defined constraint.
+- Scheduler does not create overlapping active rounds.
+
+How to Validate
+- Start round, attempt second creation immediately, assert conflict.
+- Run scheduler simulation with existing active round.
+
+PR Requirements
+- PR title: `fix: enforce single active round constraint`
+- Include `Closes #[issue_id]` in PR description
+
+### #7 Add Idempotent State Transition Guards for Lock and Resolve Flows
+Context
+Lock/resolve operations run in loops and cron contexts. Without strict state transition guards and idempotency, repeated jobs can cause noisy failures and inconsistent side effects.
+
+What Needs to Happen
+- Make `lockRound` and `resolveRound` state transitions conditional and idempotent.
+- Return explicit outcomes (`updated`, `already_locked`, `already_resolved`).
+- Add retry-safe scheduler behavior.
+
+Files to Create/Modify
+- `src/services/round.service.ts`
+- `src/services/resolution.service.ts`
+- `src/services/scheduler.service.ts`
+- `src/services/round-scheduler.service.ts`
+
+Acceptance Criteria
+- Re-running lock/resolve for same round is safe.
+- Schedulers do not emit false errors on already-processed rounds.
+
+How to Validate
+- Trigger same operation twice and verify second pass is no-op.
+- Run auto-resolve job repeatedly with same dataset.
+
+PR Requirements
+- PR title: `fix: make round lifecycle transitions idempotent`
+- Include `Closes #[issue_id]` in PR description
+
+### #8 Add `resolvedAt` Timestamp Support and Response Consistency
+Context
+Round resolve responses reference `resolvedAt`, but schema currently has no such field, producing undefined data and inconsistent API contracts.
+
+What Needs to Happen
+- Add `resolvedAt` to Prisma `Round` model via migration.
+- Populate it during resolution.
+- Ensure API docs and response payloads are aligned.
+
+Files to Create/Modify
+- `prisma/schema.prisma`
+- `prisma/migrations/` (new migration)
+- `src/services/resolution.service.ts`
+- `src/routes/rounds.routes.ts`
+
+Acceptance Criteria
+- Resolved rounds always include non-null `resolvedAt`.
+- API response schema matches runtime output.
+
+How to Validate
+- Run `npm run prisma:migrate`.
+- Resolve a round and verify `resolvedAt` persisted and returned.
+
+PR Requirements
+- PR title: `feat: persist resolvedAt for rounds`
+- Include `Closes #[issue_id]` in PR description
+
+### #9 Make Challenge Verification and Consumption Atomic
+Context
+Auth challenge lookup and `isUsed` update occur in separate operations, leaving a race window where the same challenge could be consumed by concurrent requests.
+
+What Needs to Happen
+- Use transaction or conditional update (`updateMany` with `isUsed=false`) to consume challenge atomically.
+- Ensure only one request can successfully consume each challenge.
+- Add concurrent auth tests.
+
+Files to Create/Modify
+- `src/routes/auth.routes.ts`
+- `src/tests/` (new auth route race tests)
+
+Acceptance Criteria
+- Challenge replay via concurrent requests is prevented.
+- Exactly one request succeeds for a single challenge.
+
+How to Validate
+- Run parallel connect requests with same challenge and signature.
+- Assert one success, one auth failure.
+
+PR Requirements
+- PR title: `security: atomically consume auth challenges`
+- Include `Closes #[issue_id]` in PR description
+
+### #10 Enforce Required JWT Secret and Strong Startup Validation
+Context
+JWT utility falls back to a weak default secret when env var is missing, creating a critical production risk.
+
+What Needs to Happen
+- Remove insecure default JWT secret fallback.
+- Add startup config validation for required env vars.
+- Fail fast with clear error messages.
+
+Files to Create/Modify
+- `src/utils/jwt.util.ts`
+- `src/index.ts`
+- `README.md` (env requirements)
+
+Acceptance Criteria
+- App refuses startup without `JWT_SECRET`.
+- No hardcoded fallback secret remains.
+
+How to Validate
+- Start app without `JWT_SECRET`; verify startup fails clearly.
+- Start with valid secret; verify normal auth flows.
+
+PR Requirements
+- PR title: `security: require explicit jwt secret configuration`
+- Include `Closes #[issue_id]` in PR description
+
+### #11 Replace `console.*` Logging with Structured Logger Everywhere
+Context
+Codebase mixes `console.log/error/warn` with Winston logger, reducing observability consistency and log parsing quality.
+
+What Needs to Happen
+- Replace console statements with `logger` utility.
+- Standardize log fields and context objects.
+- Ensure production-friendly log formatting.
+
+Files to Create/Modify
+- `src/services/oracle.ts`
+- `src/routes/auth.routes.ts`
+- `src/routes/user.routes.ts`
+- `src/routes/education.routes.ts`
+- `src/services/*` (as needed)
+
+Acceptance Criteria
+- No direct `console.*` usage in runtime paths.
+- Logs are structured and consistent across modules.
+
+How to Validate
+- Grep for `console.` and confirm runtime files are clean.
+- Run app and verify consistent logger output.
+
+PR Requirements
+- PR title: `chore: standardize structured logging across backend`
+- Include `Closes #[issue_id]` in PR description
+
+### #12 Add Lifecycle Control for Oracle Polling and Price Broadcast Interval
+Context
+Oracle polling and price emit intervals are started without stop handles. In tests/restarts this can create duplicate timers and noisy behavior.
+
+What Needs to Happen
+- Return and manage interval handles for polling and broadcast loops.
+- Add `start/stop` semantics to prevent duplicate starts.
+- Use lifecycle hooks from app bootstrap.
+
+Files to Create/Modify
+- `src/services/oracle.ts`
+- `src/index.ts`
+- `src/tests/` (new timer lifecycle tests)
+
+Acceptance Criteria
+- Polling and emit loops can be started once and stopped cleanly.
+- No duplicate interval activity after restart in process.
+
+How to Validate
+- Run lifecycle tests with fake timers.
+- Manual restart scenario confirms single active loop.
+
+PR Requirements
+- PR title: `fix: add start-stop lifecycle for oracle and price broadcast`
+- Include `Closes #[issue_id]` in PR description
+
+### #13 Expand Rate Limiting to Critical Write Endpoints
+Context
+Rate limiting is strong on auth/chat but missing on several write-heavy endpoints such as prediction submission and round operations, increasing abuse/DoS risk.
+
+What Needs to Happen
+- Add per-user and per-IP rate limits for high-risk mutation routes.
+- Add separate stricter policies for admin/oracle actions.
+- Document limits in OpenAPI.
+
+Files to Create/Modify
+- `src/middleware/rateLimiter.middleware.ts`
+- `src/routes/predictions.routes.ts`
+- `src/routes/rounds.routes.ts`
+- `src/docs/openapi.ts`
+
+Acceptance Criteria
+- Abuse-prone endpoints are rate-limited with tailored policies.
+- OpenAPI docs reflect 429 behavior for affected routes.
+
+How to Validate
+- Hit endpoints in burst and verify `429` responses.
+- Confirm normal usage remains unaffected.
+
+PR Requirements
+- PR title: `security: add rate limits for mutation endpoints`
+- Include `Closes #[issue_id]` in PR description
+
+### #14 Harden Oracle Integration with Timeouts, Retries, and Staleness Checks
+Context
+Price oracle currently fetches from one source with minimal resilience. Failures keep stale values silently and there is no explicit freshness metadata on served price.
+
+What Needs to Happen
+- Add request timeout and retry/backoff.
+- Track `lastUpdatedAt` and expose staleness in API.
+- Define behavior when data is stale (for example block round creation/resolution).
+
+Files to Create/Modify
+- `src/services/oracle.ts`
+- `src/index.ts` (price endpoint)
+- `src/services/round-scheduler.service.ts`
+- `src/services/scheduler.service.ts`
+
+Acceptance Criteria
+- Oracle fetch behavior is resilient to transient failures.
+- API exposes freshness metadata.
+- Scheduler decisions include staleness safeguards.
+
+How to Validate
+- Simulate API failures/timeouts and verify retries + stale handling.
+- Confirm round creation/resolution behavior follows policy.
+
+PR Requirements
+- PR title: `feat: add resilient oracle fetching and freshness safeguards`
+- Include `Closes #[issue_id]` in PR description
+
+### #15 Integrate Real Soroban Bindings and Remove Placeholder Client
+Context
+`src/services/soroban.service.ts` currently defines `Client` as `undefined as any`, while runtime methods depend on it. This can break critical blockchain flows silently at runtime.
+
+What Needs to Happen
+- Properly import and initialize client from `@tevalabs/xelma-bindings`.
+- Add typed request/response handling and robust error mapping.
+- Add integration tests/mocks for create/place/resolve flows.
+
+Files to Create/Modify
+- `src/services/soroban.service.ts`
+- `src/types/xelma-bindings.d.ts` (if still needed)
+- `src/tests/` (new soroban service tests)
+
+Acceptance Criteria
+- Soroban client initialization is fully functional and typed.
+- No placeholder `undefined as any` client code remains.
+- Core blockchain calls are covered by tests.
+
+How to Validate
+- Run targeted Soroban service tests.
+- Perform manual test flow: create round, place bet, resolve.
+
+PR Requirements
+- PR title: `fix: wire real soroban bindings client with typed integration`
+- Include `Closes #[issue_id]` in PR description
+
+### #16 Synchronize README and OpenAPI with Actual Implemented Endpoints
+Context
+Current README route tables include outdated paths and endpoint names that do not match implemented routes (for example auth, chat, education, rounds).
+
+What Needs to Happen
+- Reconcile README endpoint sections with route files.
+- Ensure OpenAPI examples and operation summaries match real behavior.
+- Add a lightweight docs verification checklist.
+
+Files to Create/Modify
+- `README.md`
+- `src/docs/openapi.ts`
+- `docs/openapi.json` (regenerated)
+- `docs/postman-collection.json` (regenerated)
+
+Acceptance Criteria
+- No stale endpoint names or paths in docs.
+- Generated docs reflect current API contract.
+
+How to Validate
+- Run `npm run docs:openapi` and `npm run docs:postman`.
+- Spot-check a sample of endpoints from docs against running server.
+
+PR Requirements
+- PR title: `docs: align readme and openapi with implemented routes`
+- Include `Closes #[issue_id]` in PR description
+
+### #17 Introduce Request Schema Validation Layer for All Routes
+Context
+Input validation is currently ad hoc and duplicated in routes, increasing inconsistency and missed edge cases.
+
+What Needs to Happen
+- Add a shared validation layer (for example Zod/Joi).
+- Define schemas for auth, rounds, predictions, chat, and pagination query params.
+- Standardize validation error shape.
+
+Files to Create/Modify
+- `src/middleware/` (new validation middleware)
+- `src/routes/auth.routes.ts`
+- `src/routes/rounds.routes.ts`
+- `src/routes/predictions.routes.ts`
+- `src/routes/chat.routes.ts`
+
+Acceptance Criteria
+- Major routes use centralized schema validation.
+- Validation errors are consistent and documented.
+
+How to Validate
+- Add route tests for invalid payloads/types.
+- Run `npm test`.
+
+PR Requirements
+- PR title: `refactor: add centralized request schema validation`
+- Include `Closes #[issue_id]` in PR description
+
+### #18 Add Coverage for Auth, Prediction, Notification, and Socket Flows
+Context
+Current tests focus mainly on education and round service. Core auth, prediction, notification, and WebSocket paths lack meaningful automated coverage.
+
+What Needs to Happen
+- Add unit and route tests for auth challenge/connect and JWT guards.
+- Add prediction route/service tests for success and failures.
+- Add notification route/service tests including ownership checks.
+- Add Socket.IO auth and room event tests.
+
+Files to Create/Modify
+- `src/tests/auth.routes.spec.ts` (new)
+- `src/tests/prediction.service.spec.ts` (new)
+- `src/tests/notifications.routes.spec.ts` (new)
+- `src/tests/socket.spec.ts` (new)
+
+Acceptance Criteria
+- Core user-critical flows are covered by automated tests.
+- Regression risk for auth/prediction/socket paths is reduced.
+
+How to Validate
+- Run `npm test`.
+- Confirm new suites pass consistently in CI/local.
+
+PR Requirements
+- PR title: `test: expand coverage for auth prediction notifications and sockets`
+- Include `Closes #[issue_id]` in PR description
+
+### #19 Add Scheduler Integration Tests with Fake Timers and DB Fixtures
+Context
+Cron-driven behavior is difficult to reason about and currently under-tested. Round locking/resolution logic should be verified in time-driven scenarios.
+
+What Needs to Happen
+- Add scheduler tests using fake timers.
+- Cover auto-lock and auto-resolve decision logic.
+- Verify no duplicate processing and proper status transitions.
+
+Files to Create/Modify
+- `src/tests/scheduler.service.spec.ts` (new)
+- `src/tests/round-scheduler.service.spec.ts` (new)
+- `src/services/scheduler.service.ts` (small testability hooks)
+- `src/services/round-scheduler.service.ts` (small testability hooks)
+
+Acceptance Criteria
+- Scheduler behavior is deterministic under test.
+- Time-based lifecycle transitions are covered.
+
+How to Validate
+- Run targeted scheduler tests and full `npm test`.
+
+PR Requirements
+- PR title: `test: add deterministic coverage for cron schedulers`
+- Include `Closes #[issue_id]` in PR description
+
+### #20 Migrate Monetary Fields from Float to Decimal-Safe Representation
+Context
+Balances, pools, and payouts currently rely on `Float` values in Prisma/models, which can introduce rounding drift in financial calculations.
+
+What Needs to Happen
+- Migrate monetary fields to `Decimal` (or integer minor units) in Prisma schema.
+- Update service calculations and serialization.
+- Add tests to verify deterministic payout math.
+
+Files to Create/Modify
+- `prisma/schema.prisma`
+- `prisma/migrations/` (new migration)
+- `src/services/prediction.service.ts`
+- `src/services/resolution.service.ts`
+- `src/services/leaderboard.service.ts`
+- `src/tests/` (new monetary precision tests)
+
+Acceptance Criteria
+- No float precision anomalies in balance/payout flows.
+- Monetary calculations are deterministic across environments.
+
+How to Validate
+- Run migration and targeted payout tests with fractional edge cases.
+- Verify balances reconcile after multi-round simulation.
+
+PR Requirements
+- PR title: `refactor: move monetary math to decimal-safe types`
+- Include `Closes #[issue_id]` in PR description
+
+---
+
 ## Related Repositories
 
 - **Smart Contract**: [TevaLabs/Xelma-Blockchain](https://github.com/TevaLabs/Xelma-Blockchain)
