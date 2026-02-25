@@ -122,6 +122,12 @@ router.post('/start', requireAdmin, async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         logger.error('Failed to start round:', error);
+        
+        // Return 409 Conflict if active round already exists
+        if (error.code === 'ACTIVE_ROUND_EXISTS') {
+            return res.status(409).json({ error: error.message });
+        }
+        
         res.status(500).json({ error: error.message || 'Failed to start round' });
     }
 });
