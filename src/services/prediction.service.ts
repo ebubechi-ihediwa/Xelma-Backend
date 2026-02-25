@@ -57,7 +57,7 @@ export class PredictionService {
       }
 
       // Check balance
-      if (user.virtualBalance < amount) {
+      if (Number(user.virtualBalance) < amount) {
         throw new Error("Insufficient balance");
       }
 
@@ -84,7 +84,7 @@ export class PredictionService {
         await prisma.user.update({
           where: { id: userId },
           data: {
-            virtualBalance: user.virtualBalance - amount,
+            virtualBalance: { decrement: amount },
           },
         });
 
@@ -131,7 +131,7 @@ export class PredictionService {
         await prisma.user.update({
           where: { id: userId },
           data: {
-            virtualBalance: user.virtualBalance - amount,
+            virtualBalance: { decrement: amount },
           },
         });
 

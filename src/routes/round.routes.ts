@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import { prisma } from "../lib/prisma";
+import { Decimal } from "@prisma/client/runtime/library";
 import sorobanService from "../services/soroban.service";
 import { authenticateToken, AuthRequest } from "../middleware/auth.middleware";
 import {
@@ -356,9 +357,10 @@ router.post(
 
       let outcome: BetSide | null = null;
 
-      if (finalPriceNum > round.startPrice) {
+      const finalPriceDec = new Decimal(finalPriceNum);
+      if (finalPriceDec.gt(round.startPrice)) {
         outcome = BetSide.UP;
-      } else if (finalPriceNum < round.startPrice) {
+      } else if (finalPriceDec.lt(round.startPrice)) {
         outcome = BetSide.DOWN;
       }
 
@@ -379,7 +381,7 @@ router.post(
         : 0;
       const losersCount = winSide
         ? predictions.filter((p) => p.side !== winSide && p.side !== null)
-            .length
+          .length
         : 0;
 
       const response: ResolveRoundResponse = {
@@ -442,11 +444,11 @@ router.get("/active", async (_req: AuthRequest, res: Response) => {
 
     const poolUp = predictions
       .filter((p) => p.side === "UP")
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum.plus(p.amount), new Decimal(0));
 
     const poolDown = predictions
       .filter((p) => p.side === "DOWN")
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum.plus(p.amount), new Decimal(0));
 
     const response = {
       roundId: activeRound.id,
