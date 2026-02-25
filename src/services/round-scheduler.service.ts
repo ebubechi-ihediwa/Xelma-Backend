@@ -47,6 +47,11 @@ class RoundSchedulerService {
         return;
       }
 
+      if (priceOracle.isStale()) {
+        logger.warn("[Round Scheduler] Skipping round creation: oracle price data is stale");
+        return;
+      }
+
       const mode = this.getMode();
       const gameMode = mode === "UP_DOWN" ? "UP_DOWN" : "LEGENDS";
 

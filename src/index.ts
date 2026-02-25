@@ -76,9 +76,12 @@ export function createApp(): Express {
   // Price Oracle endpoint
   app.get("/api/price", (req: Request, res: Response) => {
     const price = priceOracle.getPrice();
+    const lastUpdatedAt = priceOracle.getLastUpdatedAt();
     res.json({
       asset: "XLM",
       price_usd: price,
+      stale: priceOracle.isStale(),
+      lastUpdatedAt: lastUpdatedAt?.toISOString() ?? null,
       timestamp: new Date().toISOString(),
     });
   });
