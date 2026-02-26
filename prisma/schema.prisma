@@ -62,7 +62,7 @@ model User {
   nickname                String?
   avatarUrl               String?
   preferences             Json?
-  virtualBalance          Decimal   @default(1000) @db.Decimal(18, 8)
+  virtualBalance          Decimal   @default(1000) @db.Decimal(20, 8)
   wins          Int      @default(0)
   streak        Int      @default(0)
   role                    UserRole  @default(USER)
@@ -121,6 +121,7 @@ model Round {
   poolUp         Decimal     @default(0) @db.Decimal(18, 8)
   poolDown       Decimal     @default(0) @db.Decimal(18, 8)
   priceRanges    Json?
+  resolvedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -172,17 +173,17 @@ model UserStats {
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  totalPredictions   Int   @default(0)
-  correctPredictions Int   @default(0)
-  totalEarnings      Decimal @default(0) @db.Decimal(18, 8)
+  totalPredictions   Int     @default(0)
+  correctPredictions Int     @default(0)
+  totalEarnings      Decimal @default(0) @db.Decimal(20, 8)
 
-  upDownWins     Int   @default(0)
-  upDownLosses   Int   @default(0)
-  upDownEarnings Decimal @default(0) @db.Decimal(18, 8)
+  upDownWins     Int     @default(0)
+  upDownLosses   Int     @default(0)
+  upDownEarnings Decimal @default(0) @db.Decimal(20, 8)
 
-  legendsWins     Int   @default(0)
-  legendsLosses   Int   @default(0)
-  legendsEarnings Decimal @default(0) @db.Decimal(18, 8)
+  legendsWins     Int     @default(0)
+  legendsLosses   Int     @default(0)
+  legendsEarnings Decimal @default(0) @db.Decimal(20, 8)
 
   updatedAt DateTime @updatedAt
 
@@ -194,7 +195,7 @@ model Transaction {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  amount      Decimal @db.Decimal(18, 8)
+  amount      Decimal         @db.Decimal(20, 8)
   type        TransactionType
   description String?
   roundId     String?

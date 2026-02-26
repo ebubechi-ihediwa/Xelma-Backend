@@ -2,6 +2,7 @@ import sorobanService from "./soroban.service";
 import websocketService from "./websocket.service";
 import logger from "../utils/logger";
 import { prisma } from "../lib/prisma";
+import { toDecimal, toNumber, decLt } from "../utils/decimal.util";
 
 interface PriceRange {
   min: number;
@@ -56,8 +57,8 @@ export class PredictionService {
         throw new Error("User not found");
       }
 
-      // Check balance
-      if (Number(user.virtualBalance) < amount) {
+      // Check balance (decimal-safe comparison)
+      if (decLt(user.virtualBalance, amount)) {
         throw new Error("Insufficient balance");
       }
 
@@ -70,21 +71,23 @@ export class PredictionService {
         // Call Soroban contract
         await sorobanService.placeBet(user.walletAddress, amount, side);
 
+        const decimalAmount = toDecimal(amount);
+
         // Create prediction in database
         const prediction = await prisma.prediction.create({
           data: {
             roundId,
             userId,
-            amount,
+            amount: decimalAmount,
             side,
           },
         });
 
-        // Update user balance
+        // Update user balance (use decrement for precision)
         await prisma.user.update({
           where: { id: userId },
           data: {
-            virtualBalance: { decrement: amount },
+            virtualBalance: { decrement: decimalAmount },
           },
         });
 
@@ -92,8 +95,8 @@ export class PredictionService {
         await prisma.round.update({
           where: { id: roundId },
           data: {
-            poolUp: side === "UP" ? { increment: amount } : undefined,
-            poolDown: side === "DOWN" ? { increment: amount } : undefined,
+            poolUp: side === "UP" ? { increment: decimalAmount } : undefined,
+            poolDown: side === "DOWN" ? { increment: decimalAmount } : undefined,
           },
         });
 
@@ -117,21 +120,23 @@ export class PredictionService {
           throw new Error("Invalid price range");
         }
 
+        const decimalAmount = toDecimal(amount);
+
         // Create prediction in database
         const prediction = await prisma.prediction.create({
           data: {
             roundId,
             userId,
-            amount,
+            amount: decimalAmount,
             priceRange: priceRange as any,
           },
         });
 
-        // Update user balance
+        // Update user balance (use decrement for precision)
         await prisma.user.update({
           where: { id: userId },
           data: {
-            virtualBalance: { decrement: amount },
+            virtualBalance: { decrement: decimalAmount },
           },
         });
 

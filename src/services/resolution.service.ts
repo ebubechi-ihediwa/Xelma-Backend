@@ -4,7 +4,15 @@ import notificationService from "./notification.service";
 import logger from "../utils/logger";
 import educationTipService from "./education-tip.service";
 import { prisma } from "../lib/prisma";
-import { Prisma } from "@prisma/client";
+import {
+  toDecimal,
+  toNumber,
+  decAdd,
+  decDiv,
+  decMul,
+  decEq,
+  decFixed,
+} from "../utils/decimal.util";
 import { Decimal } from "@prisma/client/runtime/library";
 
 interface PriceRange {
@@ -50,12 +58,14 @@ export class ResolutionService {
         await this.resolveLegendsRound(round, finalPrice);
       }
 
-      // Update round status
+      // Update round status and persist resolvedAt
+      const resolvedAt = new Date();
       await prisma.round.update({
         where: { id: roundId },
         data: {
           status: "RESOLVED",
-          endPrice: finalPrice,
+          endPrice: toDecimal(finalPrice),
+          resolvedAt,
         },
       });
 
@@ -101,21 +111,21 @@ export class ResolutionService {
     // Call Soroban contract to resolve
     await sorobanService.resolveRound(finalPrice);
 
-    const finalPriceDec = new Decimal(finalPrice);
-    const priceWentUp = finalPriceDec.gt(round.startPrice);
-    const priceWentDown = finalPriceDec.lt(round.startPrice);
-    const priceUnchanged = finalPriceDec.eq(round.startPrice);
+    const priceWentUp = finalPrice > toNumber(round.startPrice);
+    const priceWentDown = finalPrice < toNumber(round.startPrice);
+    const priceUnchanged = finalPrice === toNumber(round.startPrice);
 
     const winningSide = priceWentUp ? "UP" : priceWentDown ? "DOWN" : null;
 
     if (priceUnchanged) {
       // Refund everyone
       for (const prediction of round.predictions) {
+        const refundAmount = toDecimal(prediction.amount);
         await prisma.prediction.update({
           where: { id: prediction.id },
           data: {
             won: null,
-            payout: prediction.amount,
+            payout: refundAmount,
           },
         });
 
@@ -123,7 +133,7 @@ export class ResolutionService {
           where: { id: prediction.userId },
           data: {
             virtualBalance: {
-              increment: prediction.amount,
+              increment: refundAmount,
             },
           },
         });
@@ -135,20 +145,25 @@ export class ResolutionService {
       return;
     }
 
-    // Calculate payouts for winners
-    const winningPool = new Decimal(winningSide === "UP" ? round.poolUp : round.poolDown);
-    const losingPool = new Decimal(winningSide === "UP" ? round.poolDown : round.poolUp);
+    // Calculate payouts for winners (decimal-safe)
+    const winningPool = toDecimal(
+      winningSide === "UP" ? round.poolUp : round.poolDown,
+    );
+    const losingPool = toDecimal(
+      winningSide === "UP" ? round.poolDown : round.poolUp,
+    );
 
-    if (winningPool.eq(0)) {
+    if (decEq(winningPool, 0)) {
       logger.warn(`Round ${round.id}: No winners, no payouts`);
       return;
     }
 
     for (const prediction of round.predictions) {
       if (prediction.side === winningSide) {
-        // Winner: gets bet back + proportional share of losing pool
-        const share = prediction.amount.div(winningPool).mul(losingPool).toDecimalPlaces(8, Decimal.ROUND_DOWN);
-        const payout = prediction.amount.plus(share).toDecimalPlaces(8, Decimal.ROUND_DOWN);
+        // Winner: gets bet back + proportional share of losing pool (decimal-safe)
+        const predAmount = toDecimal(prediction.amount);
+        const share = decMul(decDiv(predAmount, winningPool), losingPool);
+        const payout = decAdd(predAmount, share);
 
         await prisma.prediction.update({
           where: { id: prediction.id },
@@ -178,8 +193,8 @@ export class ResolutionService {
           userId: prediction.userId,
           type: "WIN",
           title: "You Won!",
-          message: `Your prediction was correct! You won ${payout.toFixed(2)} XLM in Round #${round.id.slice(0, 6)}.`,
-          data: { roundId: round.id, amount: payout.toNumber() },
+          message: `Your prediction was correct! You won ${decFixed(payout)} XLM in Round #${round.id.slice(0, 6)}.`,
+          data: { roundId: round.id, amount: toNumber(payout) },
         });
         if (winNotif) {
           websocketService.emitNotification(prediction.userId, winNotif);
@@ -240,11 +255,12 @@ export class ResolutionService {
     if (!winningRange) {
       // Price outside all ranges - refund everyone
       for (const prediction of round.predictions) {
+        const refundAmount = toDecimal(prediction.amount);
         await prisma.prediction.update({
           where: { id: prediction.id },
           data: {
             won: null,
-            payout: prediction.amount,
+            payout: refundAmount,
           },
         });
 
@@ -252,7 +268,7 @@ export class ResolutionService {
           where: { id: prediction.userId },
           data: {
             virtualBalance: {
-              increment: prediction.amount,
+              increment: refundAmount,
             },
           },
         });
@@ -264,15 +280,15 @@ export class ResolutionService {
       return;
     }
 
-    // Calculate total pool and winning pool
+    // Calculate total pool and winning pool (decimal-safe)
     const totalPool = priceRanges.reduce(
-      (sum, range) => sum.plus(new Decimal(range.pool)),
-      new Decimal(0),
+      (sum, range) => decAdd(sum, range.pool),
+      toDecimal(0),
     );
-    const winningPool = new Decimal(winningRange.pool);
-    const losingPool = totalPool.minus(winningPool);
+    const decWinningPool = toDecimal(winningRange.pool);
+    const decLosingPool = toDecimal(totalPool).sub(decWinningPool);
 
-    if (winningPool.eq(0)) {
+    if (decEq(decWinningPool, 0)) {
       logger.warn(`Round ${round.id}: No winners in range, no payouts`);
       return;
     }
@@ -284,9 +300,10 @@ export class ResolutionService {
         new Decimal(predictionRange.min).eq(winningRange.min) &&
         new Decimal(predictionRange.max).eq(winningRange.max)
       ) {
-        // Winner
-        const share = prediction.amount.div(winningPool).mul(losingPool).toDecimalPlaces(8, Decimal.ROUND_DOWN);
-        const payout = prediction.amount.plus(share).toDecimalPlaces(8, Decimal.ROUND_DOWN);
+        // Winner (decimal-safe)
+        const predAmount = toDecimal(prediction.amount);
+        const share = decMul(decDiv(predAmount, decWinningPool), decLosingPool);
+        const payout = decAdd(predAmount, share);
 
         await prisma.prediction.update({
           where: { id: prediction.id },
