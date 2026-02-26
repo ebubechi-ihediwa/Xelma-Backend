@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { GameMode } from "@prisma/client";
+import { Decimal } from "@prisma/client/runtime/library";
 import {
   LeaderboardEntry,
   LeaderboardResponse,
@@ -165,8 +166,8 @@ export async function updateUserStatsForRound(roundId: string): Promise<void> {
   for (const prediction of round.predictions) {
     const isCorrect = calculatePredictionResult(prediction, round);
     const earnings = isCorrect
-      ? parseFloat(prediction.amount.toString())
-      : -parseFloat(prediction.amount.toString());
+      ? prediction.amount
+      : prediction.amount.negated();
 
     // Determine mode from round
     const isUpDown = round.mode === GameMode.UP_DOWN;
@@ -209,7 +210,7 @@ function calculatePredictionResult(prediction: any, round: any): boolean {
 
   if (round.mode === GameMode.UP_DOWN) {
     // Up/Down mode - check if prediction side matches price movement
-    const priceWentUp = round.endPrice > round.startPrice;
+    const priceWentUp = round.endPrice.gt(round.startPrice);
     return (
       (prediction.side === "UP" && priceWentUp) ||
       (prediction.side === "DOWN" && !priceWentUp)
@@ -218,8 +219,8 @@ function calculatePredictionResult(prediction: any, round: any): boolean {
     // Legends mode - check if price falls within predicted range
     if (!prediction.priceRange) return false;
     const range = prediction.priceRange as { min: number; max: number };
-    const endPrice = parseFloat(round.endPrice.toString());
-    return endPrice >= range.min && endPrice <= range.max;
+    const endPrice = round.endPrice;
+    return endPrice.gte(new Decimal(range.min)) && endPrice.lt(new Decimal(range.max));
   }
 }
 

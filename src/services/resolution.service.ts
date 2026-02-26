@@ -4,6 +4,8 @@ import notificationService from "./notification.service";
 import logger from "../utils/logger";
 import educationTipService from "./education-tip.service";
 import { prisma } from "../lib/prisma";
+import { Prisma } from "@prisma/client";
+import { Decimal } from "@prisma/client/runtime/library";
 
 interface PriceRange {
   min: number;
@@ -99,9 +101,10 @@ export class ResolutionService {
     // Call Soroban contract to resolve
     await sorobanService.resolveRound(finalPrice);
 
-    const priceWentUp = finalPrice > round.startPrice;
-    const priceWentDown = finalPrice < round.startPrice;
-    const priceUnchanged = finalPrice === round.startPrice;
+    const finalPriceDec = new Decimal(finalPrice);
+    const priceWentUp = finalPriceDec.gt(round.startPrice);
+    const priceWentDown = finalPriceDec.lt(round.startPrice);
+    const priceUnchanged = finalPriceDec.eq(round.startPrice);
 
     const winningSide = priceWentUp ? "UP" : priceWentDown ? "DOWN" : null;
 
@@ -133,10 +136,10 @@ export class ResolutionService {
     }
 
     // Calculate payouts for winners
-    const winningPool = winningSide === "UP" ? round.poolUp : round.poolDown;
-    const losingPool = winningSide === "UP" ? round.poolDown : round.poolUp;
+    const winningPool = new Decimal(winningSide === "UP" ? round.poolUp : round.poolDown);
+    const losingPool = new Decimal(winningSide === "UP" ? round.poolDown : round.poolUp);
 
-    if (winningPool === 0) {
+    if (winningPool.eq(0)) {
       logger.warn(`Round ${round.id}: No winners, no payouts`);
       return;
     }
@@ -144,8 +147,8 @@ export class ResolutionService {
     for (const prediction of round.predictions) {
       if (prediction.side === winningSide) {
         // Winner: gets bet back + proportional share of losing pool
-        const share = (prediction.amount / winningPool) * losingPool;
-        const payout = prediction.amount + share;
+        const share = prediction.amount.div(winningPool).mul(losingPool).toDecimalPlaces(8, Decimal.ROUND_DOWN);
+        const payout = prediction.amount.plus(share).toDecimalPlaces(8, Decimal.ROUND_DOWN);
 
         await prisma.prediction.update({
           where: { id: prediction.id },
@@ -176,7 +179,7 @@ export class ResolutionService {
           type: "WIN",
           title: "You Won!",
           message: `Your prediction was correct! You won ${payout.toFixed(2)} XLM in Round #${round.id.slice(0, 6)}.`,
-          data: { roundId: round.id, amount: payout },
+          data: { roundId: round.id, amount: payout.toNumber() },
         });
         if (winNotif) {
           websocketService.emitNotification(prediction.userId, winNotif);
@@ -224,12 +227,15 @@ export class ResolutionService {
     round: any,
     finalPrice: number,
   ): Promise<void> {
+    const finalPriceDec = new Decimal(finalPrice);
     const priceRanges = round.priceRanges as PriceRange[];
 
     // Find winning range
-    const winningRange = priceRanges.find(
-      (range) => finalPrice >= range.min && finalPrice < range.max,
-    );
+    const winningRange = priceRanges.find((range) => {
+      const min = new Decimal(range.min);
+      const max = new Decimal(range.max);
+      return finalPriceDec.gte(min) && finalPriceDec.lt(max);
+    });
 
     if (!winningRange) {
       // Price outside all ranges - refund everyone
@@ -259,25 +265,28 @@ export class ResolutionService {
     }
 
     // Calculate total pool and winning pool
-    const totalPool = priceRanges.reduce((sum, range) => sum + range.pool, 0);
-    const winningPool = winningRange.pool;
-    const losingPool = totalPool - winningPool;
+    const totalPool = priceRanges.reduce(
+      (sum, range) => sum.plus(new Decimal(range.pool)),
+      new Decimal(0),
+    );
+    const winningPool = new Decimal(winningRange.pool);
+    const losingPool = totalPool.minus(winningPool);
 
-    if (winningPool === 0) {
+    if (winningPool.eq(0)) {
       logger.warn(`Round ${round.id}: No winners in range, no payouts`);
       return;
     }
 
     for (const prediction of round.predictions) {
-      const predictionRange = prediction.priceRange as PriceRange;
+      const predictionRange = prediction.priceRange as any;
 
       if (
-        predictionRange.min === winningRange.min &&
-        predictionRange.max === winningRange.max
+        new Decimal(predictionRange.min).eq(winningRange.min) &&
+        new Decimal(predictionRange.max).eq(winningRange.max)
       ) {
         // Winner
-        const share = (prediction.amount / winningPool) * losingPool;
-        const payout = prediction.amount + share;
+        const share = prediction.amount.div(winningPool).mul(losingPool).toDecimalPlaces(8, Decimal.ROUND_DOWN);
+        const payout = prediction.amount.plus(share).toDecimalPlaces(8, Decimal.ROUND_DOWN);
 
         await prisma.prediction.update({
           where: { id: prediction.id },
