@@ -13,6 +13,7 @@ import {
   decEq,
   decFixed,
 } from "../utils/decimal.util";
+import { Decimal } from "@prisma/client/runtime/library";
 
 interface PriceRange {
   min: number;
