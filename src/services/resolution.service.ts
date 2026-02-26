@@ -241,12 +241,15 @@ export class ResolutionService {
     round: any,
     finalPrice: number,
   ): Promise<void> {
+    const finalPriceDec = new Decimal(finalPrice);
     const priceRanges = round.priceRanges as PriceRange[];
 
     // Find winning range
-    const winningRange = priceRanges.find(
-      (range) => finalPrice >= range.min && finalPrice < range.max,
-    );
+    const winningRange = priceRanges.find((range) => {
+      const min = new Decimal(range.min);
+      const max = new Decimal(range.max);
+      return finalPriceDec.gte(min) && finalPriceDec.lt(max);
+    });
 
     if (!winningRange) {
       // Price outside all ranges - refund everyone
@@ -290,11 +293,11 @@ export class ResolutionService {
     }
 
     for (const prediction of round.predictions) {
-      const predictionRange = prediction.priceRange as PriceRange;
+      const predictionRange = prediction.priceRange as any;
 
       if (
-        predictionRange.min === winningRange.min &&
-        predictionRange.max === winningRange.max
+        new Decimal(predictionRange.min).eq(winningRange.min) &&
+        new Decimal(predictionRange.max).eq(winningRange.max)
       ) {
         // Winner (decimal-safe)
         const predAmount = toDecimal(prediction.amount);

@@ -113,13 +113,13 @@ model Round {
   id             String      @id @default(uuid())
   mode           GameMode
   status         RoundStatus @default(PENDING)
-  startPrice     Decimal     @db.Decimal(20, 8)
-  endPrice       Decimal?    @db.Decimal(20, 8)
+  startPrice     Decimal     @db.Decimal(18, 8)
+  endPrice       Decimal?    @db.Decimal(18, 8)
   startTime      DateTime
   endTime        DateTime
   sorobanRoundId String?     @unique
-  poolUp         Decimal     @default(0) @db.Decimal(20, 8)
-  poolDown       Decimal     @default(0) @db.Decimal(20, 8)
+  poolUp         Decimal     @default(0) @db.Decimal(18, 8)
+  poolDown       Decimal     @default(0) @db.Decimal(18, 8)
   priceRanges    Json?
   resolvedAt     DateTime?
 
@@ -140,14 +140,14 @@ model Prediction {
   userId     String
   roundId    String
   side       PredictionSide?
-  amount     Decimal         @db.Decimal(20, 8)
+  amount     Decimal @db.Decimal(18, 8)
   priceRange Json?
 
   user  User  @relation(fields: [userId], references: [id])
   round Round @relation(fields: [roundId], references: [id])
 
   won    Boolean?
-  payout Decimal?          @db.Decimal(20, 8)
+  payout Decimal? @db.Decimal(18, 8)
 
   createdAt DateTime @default(now())
 

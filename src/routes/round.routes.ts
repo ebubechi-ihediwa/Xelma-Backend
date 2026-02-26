@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import { prisma } from "../lib/prisma";
+import { Decimal } from "@prisma/client/runtime/library";
 import sorobanService from "../services/soroban.service";
 import { authenticateToken, AuthRequest } from "../middleware/auth.middleware";
 import {
@@ -380,7 +381,7 @@ router.post(
         : 0;
       const losersCount = winSide
         ? predictions.filter((p) => p.side !== winSide && p.side !== null)
-            .length
+          .length
         : 0;
 
       const response: ResolveRoundResponse = {

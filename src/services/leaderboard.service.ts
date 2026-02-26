@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { GameMode } from "@prisma/client";
+import { Decimal } from "@prisma/client/runtime/library";
 import {
   LeaderboardEntry,
   LeaderboardResponse,
@@ -212,7 +213,7 @@ function calculatePredictionResult(prediction: any, round: any): boolean {
 
   if (round.mode === GameMode.UP_DOWN) {
     // Up/Down mode - check if prediction side matches price movement
-    const priceWentUp = round.endPrice > round.startPrice;
+    const priceWentUp = round.endPrice.gt(round.startPrice);
     return (
       (prediction.side === "UP" && priceWentUp) ||
       (prediction.side === "DOWN" && !priceWentUp)
