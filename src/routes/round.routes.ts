@@ -15,6 +15,7 @@ import {
   BetSide,
 } from "../types/round.types";
 import logger from "../utils/logger";
+import { toNumber } from "../utils/decimal.util";
 
 const router = Router();
 
@@ -356,9 +357,9 @@ router.post(
 
       let outcome: BetSide | null = null;
 
-      if (finalPriceNum > round.startPrice) {
+      if (finalPriceNum > toNumber(round.startPrice)) {
         outcome = BetSide.UP;
-      } else if (finalPriceNum < round.startPrice) {
+      } else if (finalPriceNum < toNumber(round.startPrice)) {
         outcome = BetSide.DOWN;
       }
 
@@ -442,11 +443,11 @@ router.get("/active", async (_req: AuthRequest, res: Response) => {
 
     const poolUp = predictions
       .filter((p) => p.side === "UP")
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum + toNumber(p.amount), 0);
 
     const poolDown = predictions
       .filter((p) => p.side === "DOWN")
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum + toNumber(p.amount), 0);
 
     const response = {
       roundId: activeRound.id,

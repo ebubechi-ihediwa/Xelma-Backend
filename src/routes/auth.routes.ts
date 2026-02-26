@@ -22,6 +22,7 @@ import {
 } from "../middleware/rateLimiter.middleware";
 import { validate } from "../middleware/validate.middleware";
 import { challengeSchema, connectSchema } from "../schemas/auth.schema";
+import logger from "../utils/logger";
 
 const router = Router();
 
@@ -123,7 +124,7 @@ router.post(
 
       return res.status(200).json(response);
     } catch (error) {
-      console.error("Error generating challenge:", error);
+      logger.error("Error generating challenge:", { error });
       return res.status(500).json({
         error: "Internal Server Error",
         message: "Failed to generate authentication challenge",
@@ -408,7 +409,7 @@ router.post(
 
       return res.status(200).json(response);
     } catch (error) {
-      console.error("Error authenticating wallet:", error);
+      logger.error("Error authenticating wallet:", { error });
       return res.status(500).json({
         error: "Internal Server Error",
         message: "Failed to authenticate wallet",
